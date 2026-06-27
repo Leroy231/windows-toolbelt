@@ -10,6 +10,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
+using System.Windows.Shell;
 using System.Windows.Threading;
 using Microsoft.Toolkit.Uwp.Notifications;
 using Microsoft.Win32;
@@ -360,9 +361,31 @@ public partial class MainWindow : Window
         StartPauseThumbButton.ImageSource = CreateGlyphIcon("\uE769");
     }
 
+    private void UpdateTaskbarProgress()
+    {
+        if (TaskbarItemInfo == null) return;
+
+        var total = _currentPomodoroDuration;
+        var elapsed = total - _timeRemaining;
+
+        if (_phase != TimerPhase.Pomodoro || total <= TimeSpan.Zero || elapsed <= TimeSpan.Zero)
+        {
+            TaskbarItemInfo.ProgressState = TaskbarItemProgressState.None;
+            TaskbarItemInfo.ProgressValue = 0;
+            return;
+        }
+
+        TaskbarItemInfo.ProgressState = _isRunning
+            ? TaskbarItemProgressState.Normal
+            : TaskbarItemProgressState.Paused;
+        TaskbarItemInfo.ProgressValue = Math.Clamp(elapsed / total, 0.0, 1.0);
+    }
+
     private void UpdateTaskbarOverlay()
     {
         if (TaskbarItemInfo == null) return;
+
+        UpdateTaskbarProgress();
 
         if (!_isRunning)
         {
