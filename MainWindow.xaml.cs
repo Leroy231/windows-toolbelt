@@ -15,7 +15,7 @@ using System.Windows.Threading;
 using Microsoft.Toolkit.Uwp.Notifications;
 using Microsoft.Win32;
 
-namespace WindowsPomodoro;
+namespace WindowsToolbelt;
 
 public partial class MainWindow : Window
 {
@@ -25,6 +25,8 @@ public partial class MainWindow : Window
 
     private readonly DispatcherTimer _timer;
     private readonly AppSettings _settings;
+    private readonly WindowLayoutService _windowLayout = new(Path.Combine(ToolbeltPaths.DataDirectory, "window-layout.json"));
+    private bool _layoutBusy;
     private readonly ImageSource _defaultIcon;
     private readonly ImageSource _sittingIcon;
     private readonly IntPtr _defaultSmallIconHandle;
@@ -43,10 +45,9 @@ public partial class MainWindow : Window
     private bool _isUpdatingDeskModeControls;
 
     private const string RegistryKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-    private const string RegistryValueName = "WindowsPomodoro";
-    private static readonly string SettingsDirectory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "WindowsPomodoro");
+    private const string RegistryValueName = "WindowsToolbelt";
+    private const string LegacyRegistryValueName = "WindowsPomodoro";
+    private static readonly string SettingsDirectory = ToolbeltPaths.DataDirectory;
     private static readonly string SettingsFilePath = Path.Combine(SettingsDirectory, "settings.json");
     private static readonly JsonSerializerOptions SettingsJsonSerializerOptions = new()
     {
@@ -78,6 +79,53 @@ public partial class MainWindow : Window
         AutoStartCheckBox.IsChecked = IsAutoStartEnabled();
         StartPauseThumbButton.ImageSource = CreateGlyphIcon("\uE768");
         ResetThumbButton.ImageSource = CreateGlyphIcon("\uE72C");
+        SaveLayoutThumbButton.ImageSource = CreateGlyphIcon("\uE74E");
+        RestoreLayoutThumbButton.ImageSource = CreateGlyphIcon("\uE8A7");
+        if (_windowLayout.HasSavedLayout)
+            LayoutStatus.Text = "Saved layout ready to restore.";
+        UpdateLayoutButtons();
+    }
+
+    private async void SaveLayout_Click(object? sender, EventArgs e) => await RunLayoutActionAsync(save: true);
+    private async void RestoreLayout_Click(object? sender, EventArgs e) => await RunLayoutActionAsync(save: false);
+
+    private async Task RunLayoutActionAsync(bool save)
+    {
+        if (_layoutBusy)
+            return;
+        _layoutBusy = true;
+        UpdateLayoutButtons();
+        LayoutStatus.Text = save ? "Saving window layout…" : "Restoring window layout…";
+        LayoutStatus.Foreground = Brushes.Gray;
+        try
+        {
+            if (save)
+            {
+                var layout = await Task.Run(_windowLayout.Save);
+                LayoutStatus.Text = $"Saved {layout.Windows.Count} windows at {layout.SavedAt:t}.";
+            }
+            else
+            {
+                var result = await Task.Run(_windowLayout.Restore);
+                LayoutStatus.Text = $"Restored {result.Restored} windows; {result.Missing} no longer open; {result.Failed} could not be moved.";
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or System.ComponentModel.Win32Exception)
+        {
+            LayoutStatus.Text = ex is FileNotFoundException ? "Save a layout first." : $"Could not {(save ? "save" : "restore")} layout: {ex.Message}";
+            LayoutStatus.Foreground = Brushes.Firebrick;
+        }
+        finally
+        {
+            _layoutBusy = false;
+            UpdateLayoutButtons();
+        }
+    }
+
+    private void UpdateLayoutButtons()
+    {
+        SaveLayoutButton.IsEnabled = SaveLayoutThumbButton.IsEnabled = !_layoutBusy;
+        RestoreLayoutButton.IsEnabled = RestoreLayoutThumbButton.IsEnabled = !_layoutBusy && _windowLayout.HasSavedLayout;
     }
 
     private static ImageSource CreateGlyphIcon(string glyph)
@@ -336,7 +384,7 @@ public partial class MainWindow : Window
     {
         var displayTime = FormatTimeRemaining(_timeRemaining);
         TimerDisplay.Text = displayTime;
-        Title = $"{displayTime} - {GetPhaseTitle()}";
+        Title = $"Windows Toolbelt - {displayTime} - {GetPhaseTitle()}";
         Background = _phase == TimerPhase.Break ? BreakBackground : PomodoroBackground;
         UpdateTaskbarOverlay();
     }
@@ -774,7 +822,7 @@ public partial class MainWindow : Window
     private static bool IsAutoStartEnabled()
     {
         using var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath, false);
-        return key?.GetValue(RegistryValueName) != null;
+        return key?.GetValue(RegistryValueName) != null || key?.GetValue(LegacyRegistryValueName) != null;
     }
 
     private void AutoStartCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -789,6 +837,7 @@ public partial class MainWindow : Window
             key.SetValue(RegistryValueName, $"\"{exePath}\"");
         else
             key.DeleteValue(RegistryValueName, false);
+        key.DeleteValue(LegacyRegistryValueName, false);
     }
 
     private void Hyperlink_RequestNavigate(object sender, RequestNavigateEventArgs e)
@@ -829,11 +878,12 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (!File.Exists(SettingsFilePath))
+            var sourcePath = File.Exists(SettingsFilePath) ? SettingsFilePath : ToolbeltPaths.LegacySettingsFile;
+            if (!File.Exists(sourcePath))
                 return new AppSettings();
 
             var settings = JsonSerializer.Deserialize<AppSettings>(
-                File.ReadAllText(SettingsFilePath),
+                File.ReadAllText(sourcePath),
                 SettingsJsonSerializerOptions);
             return NormalizeSettings(settings);
         }

@@ -1,7 +1,7 @@
-<Window x:Class="WindowsPomodoro.MainWindow"
+<Window x:Class="WindowsToolbelt.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Pomodoro Timer" Height="425" Width="480"
+        Title="Windows Toolbelt" Height="575" Width="520"
         Icon="icon.ico"
         ResizeMode="CanMinimize" WindowStartupLocation="CenterScreen">
     <Window.TaskbarItemInfo>
@@ -13,12 +13,19 @@
                 <ThumbButtonInfo x:Name="ResetThumbButton"
                                  Description="Reset"
                                  Click="ResetThumbButton_Click"/>
+                <ThumbButtonInfo x:Name="SaveLayoutThumbButton"
+                                 Description="Save window layout"
+                                 Click="SaveLayout_Click"/>
+                <ThumbButtonInfo x:Name="RestoreLayoutThumbButton"
+                                 Description="Restore window layout"
+                                 Click="RestoreLayout_Click"/>
             </TaskbarItemInfo.ThumbButtonInfos>
         </TaskbarItemInfo>
     </Window.TaskbarItemInfo>
     <Grid Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -125,8 +132,24 @@
                        Foreground="Firebrick" HorizontalAlignment="Right"
                        Margin="0,2,0,0"/>
         </StackPanel>
+        <GroupBox Header="Window layout" Grid.Row="3" Margin="0,14,0,8" Padding="10">
+            <StackPanel>
+                <TextBlock Text="Save the open windows on this desktop, then restore their positions."
+                           FontSize="11" TextWrapping="Wrap"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,6">
+                    <Button x:Name="SaveLayoutButton" Content="Save layout" Padding="14,6" Margin="0,0,8,0"
+                            ToolTip="Replace the saved layout with the current window positions"
+                            Click="SaveLayout_Click"/>
+                    <Button x:Name="RestoreLayoutButton" Content="Restore layout" Padding="14,6"
+                            ToolTip="Restore saved positions for windows that are still open"
+                            Click="RestoreLayout_Click"/>
+                </StackPanel>
+                <TextBlock x:Name="LayoutStatus" Text="No layout saved yet." FontSize="11"
+                           Foreground="Gray" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+            </StackPanel>
+        </GroupBox>
         <!-- Attribution -->
-        <TextBlock Grid.Row="3" HorizontalAlignment="Center" FontSize="9"
+        <TextBlock Grid.Row="4" HorizontalAlignment="Center" FontSize="9"
                    Foreground="Gray" Margin="0,4,0,0">
             <Hyperlink NavigateUri="https://icons8.com/icon/lPmL0NaypRwo/tomato"
                        RequestNavigate="Hyperlink_RequestNavigate">Tomato</Hyperlink>

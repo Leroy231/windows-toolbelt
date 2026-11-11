@@ -1,8 +1,8 @@
-﻿using System.Configuration;
+using System.Configuration;
 using System.Data;
 using System.Windows;
 
-namespace WindowsPomodoro;
+namespace WindowsToolbelt;
 
 /// <summary>
 /// Interaction logic for App.xaml

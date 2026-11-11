@@ -1,13 +1,13 @@
 ---
 name: run-release
-description: Publish and launch the Windows Pomodoro Release executable from the current project checkout. Use when the user asks to build and run release, publish and run, run-release, launch the release exe, or run the published WindowsPomodoro.exe.
+description: Publish and launch the Windows Toolbelt Release executable from the current project checkout. Use when the user asks to build and run release, publish and run, run-release, launch the release exe, or run the published WindowsToolbelt.exe.
 ---
 
 # Run Release
 
 Use the bundled script for the deterministic release workflow. It stops any currently running published executable, publishes Release, verifies the published `.exe`, and launches it visibly.
 
-From the Windows Pomodoro repository root, run:
+From the Windows Toolbelt repository root, run:
 
 ```powershell
 & .\.codex\skills\run-release\scripts\run-release.ps1

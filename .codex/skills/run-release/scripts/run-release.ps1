@@ -8,7 +8,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$exePath = Join-Path $RepoRoot "bin\$Configuration\$TargetFramework\$Runtime\publish\WindowsPomodoro.exe"
+$exePath = Join-Path $RepoRoot "bin\$Configuration\$TargetFramework\$Runtime\publish\WindowsToolbelt.exe"
 $exeName = [System.IO.Path]::GetFileNameWithoutExtension($exePath)
 $stoppedCount = 0
 
@@ -42,7 +42,7 @@ if (-not (Test-Path -LiteralPath $exePath)) {
     throw "Published executable was not found at $exePath."
 }
 
-$process = Start-Process -FilePath $exePath -PassThru
+$process = Start-Process -FilePath $exePath -WorkingDirectory $RepoRoot -WindowStyle Normal -PassThru
 
 Write-Output "RepoRoot: $RepoRoot"
 Write-Output "StoppedProcessCount: $stoppedCount"
