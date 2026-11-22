@@ -47,6 +47,8 @@ public partial class MainWindow : Window
     private const string RegistryKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
     private const string RegistryValueName = "WindowsToolbelt";
     private const string LegacyRegistryValueName = "WindowsPomodoro";
+    private const string StartupApprovedKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
+    private static readonly byte[] StartupApprovedEnabledState = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     private static readonly string SettingsDirectory = ToolbeltPaths.DataDirectory;
     private static readonly string SettingsFilePath = Path.Combine(SettingsDirectory, "settings.json");
     private static readonly JsonSerializerOptions SettingsJsonSerializerOptions = new()
@@ -822,7 +824,17 @@ public partial class MainWindow : Window
     private static bool IsAutoStartEnabled()
     {
         using var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath, false);
-        return key?.GetValue(RegistryValueName) != null || key?.GetValue(LegacyRegistryValueName) != null;
+        using var approvedKey = Registry.CurrentUser.OpenSubKey(StartupApprovedKeyPath, false);
+        return IsRunEntryEnabled(key, approvedKey, RegistryValueName)
+            || IsRunEntryEnabled(key, approvedKey, LegacyRegistryValueName);
+    }
+
+    // Windows skips a Run entry at login when Startup Apps (Task Manager or Settings) marks it
+    // disabled in StartupApproved\Run: an odd first byte means disabled; a missing value means enabled.
+    private static bool IsRunEntryEnabled(RegistryKey? runKey, RegistryKey? approvedKey, string valueName)
+    {
+        if (runKey?.GetValue(valueName) == null) return false;
+        return approvedKey?.GetValue(valueName) is not byte[] { Length: > 0 } state || (state[0] & 1) == 0;
     }
 
     private void AutoStartCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -832,12 +844,21 @@ public partial class MainWindow : Window
 
         using var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath, true);
         if (key == null) return;
+        using var approvedKey = Registry.CurrentUser.OpenSubKey(StartupApprovedKeyPath, true);
 
         if (AutoStartCheckBox.IsChecked == true)
+        {
             key.SetValue(RegistryValueName, $"\"{exePath}\"");
+            if (approvedKey != null && !IsRunEntryEnabled(key, approvedKey, RegistryValueName))
+                approvedKey.SetValue(RegistryValueName, StartupApprovedEnabledState, RegistryValueKind.Binary);
+        }
         else
+        {
             key.DeleteValue(RegistryValueName, false);
+            approvedKey?.DeleteValue(RegistryValueName, false);
+        }
         key.DeleteValue(LegacyRegistryValueName, false);
+        approvedKey?.DeleteValue(LegacyRegistryValueName, false);
     }
 
     private void Hyperlink_RequestNavigate(object sender, RequestNavigateEventArgs e)
