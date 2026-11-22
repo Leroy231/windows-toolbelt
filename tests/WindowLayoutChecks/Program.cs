@@ -38,6 +38,23 @@ internal static class Program
             fitted = WindowLayoutService.FitToWorkArea(Rect(100, 100, 2000, 1500), Rect(0, 0, 2560, 1600), Rect(0, 40, 800, 600));
             Check(fitted.Equals(Rect(0, 40, 800, 600)), "oversized window fits smaller work area");
 
+            var wideWork = Rect(0, 0, 7680, 2112);
+            var savedWide = new SavedWindow
+            {
+                MonitorId = "wide", MonitorDevice = @"\\.\DISPLAY1", WorkArea = wideWork,
+                NormalBounds = Rect(5746, 0, 7680, 1063)
+            };
+            var small = new DisplayMonitor("small", @"\\.\DISPLAY1", Rect(-1920, 0, 0, 1080), Rect(-1920, 0, 0, 1040));
+            var wide = new DisplayMonitor("wide", @"\\.\DISPLAY3", Rect(0, 0, 7680, 2160), wideWork);
+            Check(WindowLayoutService.ChooseMonitor(savedWide, [small, wide]) == wide, "renamed display matched by monitor id");
+            savedWide.MonitorId = string.Empty;
+            Check(WindowLayoutService.ChooseMonitor(savedWide, [small, wide]) == wide, "legacy layout ignores reassigned display name");
+            var movedWide = wide with { Bounds = Rect(1920, 0, 9600, 2160), Work = Rect(1920, 0, 9600, 2112) };
+            var primarySmall = small with { Bounds = Rect(0, 0, 1920, 1080), Work = Rect(0, 0, 1920, 1040) };
+            Check(WindowLayoutService.ChooseMonitor(savedWide, [primarySmall, movedWide]) == movedWide,
+                "legacy layout follows same-size display moved in arrangement");
+            Check(WindowLayoutService.ChooseMonitor(savedWide, [small]) == small, "disconnected display falls back to remaining one");
+
             var normal = MakeWindow("normal", windows);
             var minimized = MakeWindow("minimized", windows);
             var maximized = MakeWindow("maximized", windows);

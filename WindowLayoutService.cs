@@ -16,7 +16,7 @@ internal sealed class WindowLayoutService(string filePath)
     internal WindowLayout Save()
     {
         using var dpi = new DpiScope();
-        var layout = new WindowLayout { SavedAt = DateTimeOffset.Now, Windows = EnumerateWindows() };
+        var layout = new WindowLayout { SavedAt = DateTimeOffset.Now, Windows = EnumerateWindows(EnumerateMonitors()) };
         if (layout.Windows.Count == 0)
             throw new InvalidDataException("No windows could be saved. The previous layout was kept.");
 
@@ -45,7 +45,8 @@ internal sealed class WindowLayoutService(string filePath)
             throw new InvalidDataException("The saved layout is invalid. Save a new layout to replace it.");
 
         using var dpi = new DpiScope();
-        var available = EnumerateWindows();
+        var monitors = EnumerateMonitors();
+        var available = EnumerateWindows(monitors);
         var used = new HashSet<long>();
         var restored = 0;
         var missing = 0;
@@ -83,7 +84,7 @@ internal sealed class WindowLayoutService(string filePath)
                 continue;
             }
 
-            var monitor = FindMonitor(saved);
+            var monitor = ChooseMonitor(saved, monitors);
             var bounds = FitToWorkArea(saved.NormalBounds, saved.WorkArea, monitor.Work);
             // WINDOWPLACEMENT uses workspace coordinates, not screen coordinates.
             bounds = bounds.Offset(monitor.Bounds.Left - monitor.Work.Left, monitor.Bounds.Top - monitor.Work.Top);
@@ -100,7 +101,7 @@ internal sealed class WindowLayoutService(string filePath)
         return new RestoreResult(restored, missing, failed);
     }
 
-    private static List<SavedWindow> EnumerateWindows()
+    private static List<SavedWindow> EnumerateWindows(IReadOnlyList<DisplayMonitor> monitors)
     {
         var windows = new List<SavedWindow>();
         if (!EnumWindows((hwnd, _) =>
@@ -122,7 +123,9 @@ internal sealed class WindowLayoutService(string filePath)
             try
             {
                 using var process = Process.GetProcessById((int)pid);
-                var monitor = GetMonitor(MonitorFromWindow(hwnd, 2));
+                var info = GetMonitor(MonitorFromWindow(hwnd, 2));
+                var monitor = monitors.FirstOrDefault(m => m.Device == info.Device) ??
+                    new DisplayMonitor(string.Empty, info.Device, info.Bounds, info.Work);
                 windows.Add(new SavedWindow
                 {
                     Handle = hwnd.ToInt64(), ProcessId = (int)pid,
@@ -132,7 +135,7 @@ internal sealed class WindowLayoutService(string filePath)
                         monitor.Work.Left - monitor.Bounds.Left, monitor.Work.Top - monitor.Bounds.Top),
                     ShowCommand = placement.ShowCommand is 2 or 3 ? placement.ShowCommand : 1,
                     RestoreToMaximized = (placement.Flags & 2) != 0,
-                    MonitorDevice = monitor.Device, WorkArea = monitor.Work
+                    MonitorId = monitor.Id, MonitorDevice = monitor.Device, WorkArea = monitor.Work
                 });
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception)
@@ -145,19 +148,57 @@ internal sealed class WindowLayoutService(string filePath)
         return windows;
     }
 
-    private static MonitorInfo FindMonitor(SavedWindow saved)
+    private static List<DisplayMonitor> EnumerateMonitors()
     {
-        MonitorInfo? match = null;
+        var monitors = new List<DisplayMonitor>();
         EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr handle, IntPtr dc, ref NativeRect rect, IntPtr data) =>
         {
             var info = GetMonitor(handle);
-            if (info.Device == saved.MonitorDevice)
-                match = info;
+            monitors.Add(new DisplayMonitor(GetMonitorId(info.Device), info.Device, info.Bounds, info.Work));
             return true;
         }, IntPtr.Zero);
-        var bounds = saved.NormalBounds;
-        return match ?? GetMonitor(MonitorFromRect(ref bounds, 2));
+        if (monitors.Count == 0)
+            throw new InvalidOperationException("No displays were found.");
+        return monitors;
     }
+
+    // DISPLAYn device names are reassigned after sleep, power cycles and reconnects, so identify the
+    // physical monitor by its device interface path (stable per monitor and connector) instead.
+    private static string GetMonitorId(string device)
+    {
+        var display = new DisplayDevice { Size = Marshal.SizeOf<DisplayDevice>() };
+        for (uint i = 0; EnumDisplayDevices(device, i, ref display, 1); i++) // EDD_GET_DEVICE_INTERFACE_NAME
+        {
+            if ((display.StateFlags & 1) != 0 && !string.IsNullOrEmpty(display.DeviceId)) // DISPLAY_DEVICE_ACTIVE
+                return display.DeviceId;
+            display = new DisplayDevice { Size = Marshal.SizeOf<DisplayDevice>() };
+        }
+        return string.Empty;
+    }
+
+    internal static DisplayMonitor ChooseMonitor(SavedWindow saved, IReadOnlyList<DisplayMonitor> monitors)
+    {
+        static DisplayMonitor? Single(IEnumerable<DisplayMonitor> candidates)
+        {
+            var list = candidates.Take(2).ToList();
+            return list.Count == 1 ? list[0] : null;
+        }
+        static int Width(NativeRect r) => r.Right - r.Left;
+        static int Height(NativeRect r) => r.Bottom - r.Top;
+
+        // Prefer the same physical monitor, then an unchanged display geometry, then a display of the
+        // same size that moved in the arrangement. The volatile device name is only a last hint.
+        return (string.IsNullOrEmpty(saved.MonitorId) ? null : Single(monitors.Where(m => m.Id == saved.MonitorId)))
+            ?? Single(monitors.Where(m => m.Work.Equals(saved.WorkArea)))
+            ?? Single(monitors.Where(m => Width(m.Work) == Width(saved.WorkArea) && Height(m.Work) == Height(saved.WorkArea)))
+            ?? Single(monitors.Where(m => m.Device == saved.MonitorDevice &&
+                Width(m.Work) == Width(saved.WorkArea) && Height(m.Work) == Height(saved.WorkArea)))
+            ?? monitors.MaxBy(m => Overlap(m.Bounds, saved.NormalBounds))!;
+    }
+
+    private static long Overlap(NativeRect a, NativeRect b) =>
+        (long)Math.Max(0, Math.Min(a.Right, b.Right) - Math.Max(a.Left, b.Left)) *
+        Math.Max(0, Math.Min(a.Bottom, b.Bottom) - Math.Max(a.Top, b.Top));
 
     private static MonitorInfo GetMonitor(IntPtr handle)
     {
@@ -210,6 +251,17 @@ internal sealed class WindowLayoutService(string filePath)
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string Device;
     }
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DisplayDevice
+    {
+        public int Size;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
+        public int StateFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceId;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
+    }
+
     private delegate bool EnumWindowCallback(IntPtr hwnd, IntPtr data);
     private delegate bool EnumMonitorCallback(IntPtr monitor, IntPtr dc, ref NativeRect rect, IntPtr data);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool EnumWindows(EnumWindowCallback callback, IntPtr data);
@@ -222,8 +274,8 @@ internal sealed class WindowLayoutService(string filePath)
     [DllImport("user32.dll")] private static extern bool GetWindowPlacement(IntPtr hwnd, ref WindowPlacement placement);
     [DllImport("user32.dll")] private static extern bool SetWindowPlacement(IntPtr hwnd, ref WindowPlacement placement);
     [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, int flags);
-    [DllImport("user32.dll")] private static extern IntPtr MonitorFromRect(ref NativeRect rect, int flags);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool EnumDisplayDevices(string device, uint index, ref DisplayDevice display, uint flags);
     [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr clip, EnumMonitorCallback callback, IntPtr data);
     [DllImport("user32.dll")] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
@@ -247,6 +299,7 @@ internal sealed class SavedWindow
     public NativeRect NormalBounds { get; set; }
     public int ShowCommand { get; set; }
     public bool RestoreToMaximized { get; set; }
+    public string MonitorId { get; set; } = string.Empty;
     public string MonitorDevice { get; set; } = string.Empty;
     public NativeRect WorkArea { get; set; }
 }
@@ -262,5 +315,7 @@ internal struct NativeRect
     public readonly NativeRect Offset(int x, int y) => new()
         { Left = Left + x, Top = Top + y, Right = Right + x, Bottom = Bottom + y };
 }
+
+internal sealed record DisplayMonitor(string Id, string Device, NativeRect Bounds, NativeRect Work);
 
 internal sealed record RestoreResult(int Restored, int Missing, int Failed);
